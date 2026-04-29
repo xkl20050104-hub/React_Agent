@@ -1,0 +1,10 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 日志
+logfile/
+
+# 前端服务器
+02_frontendServer.py

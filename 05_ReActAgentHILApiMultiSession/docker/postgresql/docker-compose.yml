@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: xkl
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: postgres
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      # 1. 这里的冒号左边修改为你的新卷名
+      - my_agent_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      # ⚠️ 注意：这里你之前写的是 -U nange，请务必改成 -U xkl，否则检查会失败
+      test: ["CMD", "pg_isready", "-U", "xkl"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: ["postgres", "-c", "max_connections=200"]
+
+volumes:
+  # 2. 这里的定义也要同步修改
+  my_agent_data:

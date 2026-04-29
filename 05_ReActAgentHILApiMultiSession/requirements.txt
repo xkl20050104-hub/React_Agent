@@ -1,0 +1,24 @@
+# Core API
+fastapi
+uvicorn
+pydantic
+
+# Agent / LLM stack
+langgraph
+langgraph-checkpoint-postgres
+langchain-core
+langchain-openai
+langchain-mcp-adapters
+
+# Storage
+redis
+psycopg[binary]
+psycopg-pool
+
+# Utilities
+python-dotenv
+concurrent-log-handler
+
+# Optional CLI client (02_frontendServer.py)
+requests
+rich
