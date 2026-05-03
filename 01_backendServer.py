@@ -1,10 +1,20 @@
 import sys
 import asyncio
+import io
 
 # --- 关键修复代码：必须放在文件最开头 ---
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# 设置标准输出/错误的编码为 UTF-8
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 # ------------------------------------
+
+# 全局变量，用于在 trimmed_messages_hook 中传递最新的 system_message
+current_system_message = None
+
 import logging
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from pydantic import BaseModel, Field
@@ -44,7 +54,8 @@ handler = ConcurrentRotatingFileHandler(
     # 日志文件最大允许大小为5MB，达到上限后触发轮转
     maxBytes = Config.MAX_BYTES,
     # 在轮转时，最多保留3个历史日志文件
-    backupCount = Config.BACKUP_COUNT
+    backupCount = Config.BACKUP_COUNT,
+    encoding='utf-8'
 )
 # 设置处理器级别为DEBUG
 handler.setLevel(logging.DEBUG)
@@ -185,7 +196,7 @@ class RedisSessionManager:
         # 将会话数据存储到 Redis，使用 JSON 序列化，并设置过期时间
         await self.redis_client.set(
             f"session:{user_id}:{session_id}",
-            json.dumps(session_data, default=lambda o: o.__dict__ if not hasattr(o, 'model_dump') else o.model_dump()),
+            json.dumps(session_data, default=lambda o: o.__dict__ if not hasattr(o, 'model_dump') else o.model_dump(), ensure_ascii=False),
             ex=effective_ttl
         )
         # 将 session_id 添加到用户的会话列表中
@@ -221,7 +232,8 @@ class RedisSessionManager:
             await self.redis_client.set(
                 f"session:{user_id}:{session_id}",
                 json.dumps(current_data,
-                           default=lambda o: o.__dict__ if not hasattr(o, 'model_dump') else o.model_dump()),
+                           default=lambda o: o.__dict__ if not hasattr(o, 'model_dump') else o.model_dump(),
+                           ensure_ascii=False),
                 ex=effective_ttl
             )
             # 更新成功返回 True
@@ -394,15 +406,24 @@ async def parse_messages(messages: List[Any]) -> None:
     Args:
         messages: 包含消息的列表，每个消息是一个对象
     """
-    print("=== 消息解析结果 ===")
+    try:
+        print("=== 消息解析结果 ===")
+    except UnicodeEncodeError:
+        print("=== Message Parse Result ===")
     for idx, msg in enumerate(messages, 1):
-        print(f"\n消息 {idx}:")
+        try:
+            print(f"\n消息 {idx}:")
+        except UnicodeEncodeError:
+            print(f"\nMessage {idx}:")
         # 获取消息类型
         msg_type = msg.__class__.__name__
         print(f"类型: {msg_type}")
         # 提取消息内容
         content = getattr(msg, 'content', '')
-        print(f"内容: {content if content else '<空>'}")
+        try:
+            print(f"内容: {content if content else '<空>'}")
+        except UnicodeEncodeError:
+            print(f"Content: <empty>" if not content else f"Content: [Chinese text]")
         # 处理附加信息
         additional_kwargs = getattr(msg, 'additional_kwargs', {})
         if additional_kwargs:
@@ -487,12 +508,13 @@ async def process_agent_result(
             logger.info(f"最终智能体回复结果:{response}")
 
     except Exception as e:
+        error_message = f"Error processing agent result: {str(e)}"
         response = AgentResponse(
             session_id=session_id,
             status="error",
-            message=f"处理智能体结果时出错: {str(e)}"
+            message=error_message
         )
-        logger.error(f"处理智能体结果时出错:{response}")
+        logger.error(error_message)
 
     # 若会话存在，更新会话状态
     exists = await app.state.session_manager.session_id_exists(user_id, session_id)
@@ -508,16 +530,68 @@ async def process_agent_result(
 
 # 修剪聊天历史以满足 token 数量或消息数量的限制
 def trimmed_messages_hook(state):
+    global current_system_message
+    messages = state.get("messages", [])
+    if not messages:
+        return {"llm_input_messages": messages}
+
+    # 关键修复：如果设置了当前 system_message，用它替换历史中所有的 SystemMessage
+    if current_system_message:
+        filtered = []
+        added_system = False
+        for msg in messages:
+            msg_type = getattr(msg, 'type', None) or msg.__class__.__name__
+            if msg_type != 'system' and msg_type != 'SystemMessage':
+                filtered.append(msg)
+            else:
+                if not added_system:
+                    from langchain_core.messages import SystemMessage
+                    filtered.append(SystemMessage(content=current_system_message))
+                    added_system = True
+        if not added_system:
+            from langchain_core.messages import SystemMessage
+            filtered.insert(0, SystemMessage(content=current_system_message))
+        new_messages = filtered
+        current_system_message = None
+    else:
+        new_messages = messages
+
     trimmed_messages = trim_messages(
-        messages=state["messages"],
-        max_tokens=20,
+        messages=new_messages,
+        max_tokens=100,
         strategy="last",
         token_counter=len,
         start_on="human",
-        # include_system=True,
-        allow_partial=False
+        allow_partial=True,
+        include_system=True
     )
-    return {"llm_input_messages": trimmed_messages}
+
+    cleaned_messages = []
+    i = 0
+    while i < len(trimmed_messages):
+        msg = trimmed_messages[i]
+        msg_type = getattr(msg, 'type', None) or msg.__class__.__name__
+
+        if msg_type == 'AIMessage' and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            if i + 1 < len(trimmed_messages):
+                next_msg = trimmed_messages[i + 1]
+                next_type = getattr(next_msg, 'type', None) or next_msg.__class__.__name__
+                if next_type == 'ToolMessage':
+                    cleaned_messages.append(msg)
+                    cleaned_messages.append(next_msg)
+                    i += 2
+                    continue
+                else:
+                    i += 1
+                    continue
+            else:
+                i += 1
+                continue
+        else:
+            cleaned_messages.append(msg)
+            i += 1
+
+    return {"llm_input_messages": cleaned_messages}
 
 # 读取指定用户长期记忆中的内容
 async def read_long_term_info(user_id :str):
@@ -611,6 +685,7 @@ async def write_long_term_info(user_id :str, memory_info :str):
 # 生命周期函数 app应用初始化函数
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    pool = None
     try:
         # 实例化异步Redis会话管理器 并存储为单实例
         app.state.session_manager = RedisSessionManager(
@@ -666,8 +741,9 @@ async def lifespan(app: FastAPI):
     finally:
         # 关闭Redis连接
         await app.state.session_manager.close()
-        # 关闭PostgreSQL连接池
-        await pool.close()
+        # 关闭PostgreSQL连接池（若初始化在创建连接池之前失败，pool 未赋值）
+        if pool is not None:
+            await pool.close()
         logger.info("关闭服务并完成资源清理")
 
 # 实例化app 并使用生命周期上下文管理器进行app初始化
@@ -728,6 +804,17 @@ async def invoke_agent(request: AgentRequest):
         ttl = Config.TTL
         # 创建会话并存储到redis中
         await app.state.session_manager.create_session(user_id, session_id, status, last_query, last_response, last_updated, ttl)
+    else:
+        session_data = await app.state.session_manager.get_session(user_id, session_id)
+        current_status = session_data.get("status") if session_data else None
+        if current_status in ("interrupted", "error"):
+            await app.state.session_manager.delete_session(user_id, session_id)
+            status = "idle"
+            last_query = None
+            last_response = None
+            last_updated = time.time()
+            ttl = Config.TTL
+            await app.state.session_manager.create_session(user_id, session_id, status, last_query, last_response, last_updated, ttl)
 
     # 新请求统一更新会话信息
     status = "running"
@@ -744,22 +831,30 @@ async def invoke_agent(request: AgentRequest):
     ]
 
     try:
+        # 关键修复：设置全局变量，让 trimmed_messages_hook 可以访问到最新的 system_message
+        global current_system_message
+        current_system_message = system_message
+        
         # 先调用智能体
         result = await app.state.agent.ainvoke({"messages": messages}, config={"configurable": {"thread_id": session_id}})
         # 将返回的messages进行格式化输出 方便查看调试
-        await parse_messages(result['messages'])
+        try:
+            await parse_messages(result['messages'])
+        except Exception as parse_err:
+            logger.warning(f"解析消息时出错（不影响主流程）: {str(parse_err)}")
 
         # 再处理结果并更新会话状态
         return await process_agent_result(session_id, result, user_id)
 
     except Exception as e:
         # 异常处理
+        error_message = f"Error processing request: {str(e)}"
         error_response = AgentResponse(
             session_id=session_id,
             status="error",
-            message=f"处理请求时出错: {str(e)}"
+            message=error_message
         )
-        logger.error(f"处理请求时出错: {error_response}")
+        logger.error(error_message)
 
         # 更新会话状态
         status = "error"
@@ -813,18 +908,22 @@ async def resume_agent(response: InterruptResponse):
         # 先恢复智能体执行
         result = await app.state.agent.ainvoke(Command(resume=command_data), config={"configurable": {"thread_id": session_id}})
         # 将返回的messages进行格式化输出 方便查看调试
-        await parse_messages(result['messages'])
+        try:
+            await parse_messages(result['messages'])
+        except Exception as parse_err:
+            logger.warning(f"解析消息时出错（不影响主流程）: {str(parse_err)}")
         # 再处理结果并更新会话状态
         return await process_agent_result(session_id, result, user_id)
 
     except Exception as e:
         # 异常处理
+        error_message = f"Error resuming agent: {str(e)}"
         error_response = AgentResponse(
             session_id=session_id,
             status="error",
-            message=f"恢复执行时出错: {str(e)}"
+            message=error_message
         )
-        logger.error(f"处理请求时出错: {error_response}")
+        logger.error(error_message)
 
         # 更新会话状态
         status = "error"
