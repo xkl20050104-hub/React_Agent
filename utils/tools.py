@@ -1,7 +1,7 @@
 import os
 import logging
 from concurrent_log_handler import ConcurrentRotatingFileHandler
-from typing import Callable
+from typing import Callable, Optional
 import uuid
 from langchain_core.tools import BaseTool, tool as create_tool
 from langchain_core.runnables import RunnableConfig
@@ -42,22 +42,30 @@ def build_interrupt_description(tool_name: str, tool_input: dict) -> str:
     """
     if tool_name == "book_hotel":
         current_hotel_name = tool_input.get("hotel_name", "未提供酒店名称")
+        current_city = tool_input.get("city", "未提供城市")
+        current_district = tool_input.get("district", "未提供区域")
+        current_check_in = tool_input.get("check_in_time", "未提供入住日期")
+        current_check_out = tool_input.get("check_out_time", "未提供离店日期")
         return (
             "【酒店预订审批】\n"
             f"准备调用工具: {tool_name}\n"
             f"当前参数: {tool_input}\n\n"
             "推荐流程:\n"
-            "1) 先用高德MCP查询附近酒店（例如先筛选“汉庭酒店”）\n"
-            "2) 再在此处确认最终分店后下单\n\n"
+            "1) 先确认城市（city）、入住日期（check_in_time）与离店日期（check_out_time）\n"
+            "2) 区域（district）可选，建议有则补充\n"
+            "2) 再用高德MCP查询对应区域酒店并确认具体分店\n"
+            "3) 最后在此处下单\n\n"
             "你可以这样操作:\n"
             "1. 输入 'yes'：接受当前调用\n"
-            f"   示例: 直接预订 {current_hotel_name}\n\n"
+            f"   示例: 直接预订 {current_city}{current_district} 的 {current_hotel_name}，"
+            f"{current_check_in} 入住，{current_check_out} 离店\n\n"
             "2. 输入 'no'：拒绝本次调用\n"
             "   示例: 本次不预订，改用其他方案\n\n"
             "3. 输入 'edit'：修改参数后调用\n"
-            "   示例参数: {\"hotel_name\": \"汉庭酒店(软件园店)\"}\n\n"
+            "   示例参数: {\"hotel_name\": \"如家酒店(中关村店)\", \"city\": \"北京\", \"district\": \"海淀区\", "
+            "\"check_in_time\": \"2026-05-25\", \"check_out_time\": \"2026-05-26\"}\n\n"
             "4. 输入 'response'：不调用工具，直接反馈意见\n"
-            "   示例反馈: 把酒店名称换为：汉庭酒店(软件园店)，再调用工具预订"
+            "   示例反馈: 你还没确认我的城市和日期，请先问清楚再预订"
         )
 
     return (
@@ -123,6 +131,7 @@ async def add_human_in_the_loop(
                 logger.info(tool_response)
             except Exception as e:
                 logger.error(f"工具调用失败: {e}")
+                tool_response = f"工具调用失败：{e}"
 
         # 检查响应类型是否为“编辑”（edit）
         elif response["type"] == "edit":
@@ -134,6 +143,7 @@ async def add_human_in_the_loop(
                 logger.info(tool_response)
             except Exception as e:
                 logger.error(f"工具调用失败: {e}")
+                tool_response = f"工具调用失败：{e}"
 
         # 检查响应类型是否为“拒绝”（reject）
         elif response["type"] == "reject":
@@ -161,22 +171,79 @@ async def get_tools():
     @tool(
         "book_hotel",
         description=(
-            "酒店预订工具。建议先通过高德MCP查询附近分店（如汉庭酒店），"
-            "确认具体分店后再调用本工具下单。"
+            "酒店预订工具。参数要求：hotel_name（必填）、city（必填）、"
+            "check_in_time（必填，格式 YYYY-MM-DD）、check_out_time（必填，格式 YYYY-MM-DD）、district（可选）。"
+            "调用本工具前应先用高德MCP查询具体分店。若 hotel_name 仅是品牌名（如“如家酒店”），"
+            "不允许直接预订，必须先确认具体分店名称后再调用。"
         )
     )
-    async def book_hotel(hotel_name: str):
+    async def book_hotel(
+        hotel_name: str,
+        city: str,
+        check_in_time: str,
+        check_out_time: str,
+        district: Optional[str] = None,
+    ):
         """
        支持酒店预定的工具
 
         Args:
-            hotel_name: 酒店名称
+            hotel_name: 酒店名称（必填）
+            city: 城市（必填）
+            check_in_time: 入住日期（必填，YYYY-MM-DD）
+            check_out_time: 离店日期（必填，YYYY-MM-DD）
+            district: 区/县（可选）
 
         Returns:
             工具的调用结果
         """
+        hotel_name = (hotel_name or "").strip()
+        city = (city or "").strip()
+        check_in_time = (check_in_time or "").strip()
+        check_out_time = (check_out_time or "").strip()
+        district = (district or "").strip()
+
+        if not city:
+            raise ValueError("缺少必填参数 city。请先向用户追问：请问您想在哪个城市预订如家酒店？")
+        if not hotel_name:
+            raise ValueError("缺少必填参数 hotel_name。请先向用户追问：请问您希望预订哪家酒店/品牌？")
+        if not check_in_time:
+            raise ValueError("缺少必填参数 check_in_time。请先向用户追问：请问您的入住日期是几号？")
+        if not check_out_time:
+            raise ValueError("缺少必填参数 check_out_time。请先向用户追问：请问您的离店日期是几号？")
+
+        # 防止“仅品牌名”直接下单：要求先通过高德查询并确认具体分店
+        generic_hotel_names = {
+            "如家酒店",
+            "汉庭酒店",
+            "全季酒店",
+            "亚朵酒店",
+            "桔子酒店",
+            "7天酒店",
+            "锦江之星",
+            "格林豪泰",
+        }
+        looks_generic = (
+            hotel_name in generic_hotel_names
+            or (
+                hotel_name.endswith("酒店")
+                and "店" not in hotel_name.replace("酒店", "")
+                and "(" not in hotel_name
+                and "（" not in hotel_name
+            )
+        )
+        if looks_generic:
+            raise ValueError(
+                "酒店名称过于泛化（仅品牌名）。请先调用高德MCP查询并确认具体分店，"
+                "例如“如家酒店(广州天河店)”后再预订。"
+            )
+
         order_id = f"HTL-{uuid.uuid4().hex[:8].upper()}"
-        return f"预订成功：{hotel_name}，订单号：{order_id}。"
+        location = f"{city}{district}" if district else city
+        return (
+            f"预订成功：{location} {hotel_name}。"
+            f"入住日期：{check_in_time}，离店日期：{check_out_time}，订单号：{order_id}。"
+        )
 
     # 自定义工具 计算两个数的乘积的工具
     @tool("multiply", description="计算两个数的乘积的工具")

@@ -15,6 +15,13 @@ if sys.platform == 'win32':
 # 全局变量，用于在 trimmed_messages_hook 中传递最新的 system_message
 current_system_message = None
 
+HOTEL_BOOKING_HARD_RULE = (
+    "【酒店预订硬规则】当用户提出订酒店需求时，若未提供城市（city）、酒店名称（hotel_name）、"
+    "入住日期（check_in_time）或离店日期（check_out_time），必须先追问并补全后再调用预订工具；"
+    "district 为可选参数。调用 book_hotel 前应先使用高德MCP查询并确认具体分店，"
+    "若只有品牌名（如“如家酒店”）不得直接预订。完成预订后，最终回答必须整合展示城市、酒店名称、入住日期、离店日期。"
+)
+
 import logging
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from pydantic import BaseModel, Field
@@ -74,7 +81,10 @@ class AgentRequest(BaseModel):
     # 用户的问题
     query: str
     # 系统提示词
-    system_message: Optional[str] = "你会使用工具来帮助用户。如果工具使用被拒绝，请提示用户。"
+    system_message: Optional[str] = (
+        "你会使用工具来帮助用户。如果工具使用被拒绝，请提示用户。"
+        + HOTEL_BOOKING_HARD_RULE
+    )
 
 # 定义数据模型 客户端发起的写入长期记忆的请求数据
 class LongMemRequest(BaseModel):
@@ -775,21 +785,35 @@ async def invoke_agent(request: AgentRequest):
     user_id = request.user_id
     session_id = request.session_id
 
-    # 调用函数获取长期记忆
-    result = await read_long_term_info(user_id)
+    # 调用函数获取长期记忆。若长期记忆暂时不可用，降级继续主流程，避免接口直接 500。
+    try:
+        result = await read_long_term_info(user_id)
+    except Exception as e:
+        logger.warning(f"读取长期记忆失败，降级为无长期记忆继续执行: {e}")
+        result = {
+            "success": False,
+            "user_id": user_id,
+            "long_term_info": "",
+            "message": f"读取长期记忆失败，已降级: {e}",
+        }
+    # 强制注入酒店预订硬规则，避免前端传入的 system_message 覆盖此规则。
+    base_system_message = request.system_message or ""
+    if HOTEL_BOOKING_HARD_RULE not in base_system_message:
+        base_system_message = f"{base_system_message}{HOTEL_BOOKING_HARD_RULE}"
+
     # 检查返回结果是否成功
     if result.get("success", False):
         long_term_info = result.get("long_term_info")
         # 若获取到的内容不为空 则将记忆内容拼接到系统提示词中
         if long_term_info:
-            system_message = f"{request.system_message}我的附加信息有:{long_term_info}"
+            system_message = f"{base_system_message}我的附加信息有:{long_term_info}"
             logger.info(f"获取用户偏好配置数据，system_message的信息为:{system_message}")
         # 若获取到的内容为空，则直接使用系统提示词
         else:
-            system_message = request.system_message
+            system_message = base_system_message
             logger.info(f"未获取到用户偏好配置数据，system_message的信息为:{system_message}")
     else:
-        system_message = request.system_message
+        system_message = base_system_message
         logger.info(f"未获取到用户偏好配置数据，system_message的信息为:{system_message}")
 
     # 判断当前用户会话是否存在

@@ -27,4 +27,4 @@ class Config:
 
     # API服务地址和端口（可用环境变量 PORT 覆盖，避免与本机已有 8001 进程冲突）
     HOST = os.getenv("HOST", "0.0.0.0")
-    PORT = int(os.getenv("PORT", "8001"))
+    PORT = int(os.getenv("PORT", "8002"))

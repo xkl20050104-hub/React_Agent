@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
 
@@ -31,7 +31,7 @@ type SessionStatus = {
   last_response?: AgentResponse
 }
 
-const API_BASE_URL = 'http://localhost:8001'
+const API_BASE_URL = 'http://localhost:8002'
 
 const defaultSystemMessage =
   '你会使用工具来帮助用户。如果工具使用被拒绝，请提示用户。'
@@ -44,8 +44,7 @@ function App() {
   const [apiBaseUrl, setApiBaseUrl] = useState(API_BASE_URL)
   const [userId, setUserId] = useState(`user_${Math.floor(Date.now() / 1000)}`)
   const [sessionId, setSessionId] = useState<string>(createSessionId())
-  const [query, setQuery] = useState('你好')
-  const [systemMessage, setSystemMessage] = useState(defaultSystemMessage)
+  const [query, setQuery] = useState('')
   const [memoryInfo, setMemoryInfo] = useState('')
   const [interruptEditArgs, setInterruptEditArgs] = useState('{}')
   const [interruptResponseText, setInterruptResponseText] = useState('')
@@ -53,9 +52,9 @@ function App() {
 
   const [currentResponse, setCurrentResponse] = useState<AgentResponse | null>(null)
   const [currentStatus, setCurrentStatus] = useState<SessionStatus | null>(null)
-  const [systemInfo, setSystemInfo] = useState<{ sessions_count: number; active_users?: Record<string, string[]> } | null>(null)
   const [userSessionIds, setUserSessionIds] = useState<string[]>([])
   const [logs, setLogs] = useState<string[]>([])
+  const [streamingAnswer, setStreamingAnswer] = useState('')
 
   const pushLog = (msg: string) => {
     setLogs((prev) => [`${new Date().toLocaleTimeString()} - ${msg}`, ...prev].slice(0, 30))
@@ -68,6 +67,24 @@ function App() {
     return last?.content ?? ''
   }, [currentResponse])
 
+  useEffect(() => {
+    if (!finalAnswer) {
+      setStreamingAnswer('')
+      return
+    }
+
+    let index = 0
+    const timer = window.setInterval(() => {
+      index += 1
+      setStreamingAnswer(finalAnswer.slice(0, index))
+      if (index >= finalAnswer.length) {
+        window.clearInterval(timer)
+      }
+    }, 18)
+
+    return () => window.clearInterval(timer)
+  }, [finalAnswer])
+
   async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${apiBaseUrl}${path}`, {
       headers: { 'Content-Type': 'application/json' },
@@ -77,19 +94,6 @@ function App() {
       throw new Error(`${res.status} ${res.statusText}: ${await res.text()}`)
     }
     return res.json() as Promise<T>
-  }
-
-  async function fetchSystemInfo() {
-    setLoading(true)
-    try {
-      const data = await requestJson<{ sessions_count: number; active_users?: Record<string, string[]> }>('/system/info')
-      setSystemInfo(data)
-      pushLog(`系统会话总数：${data.sessions_count}`)
-    } catch (error) {
-      pushLog(`获取系统信息失败：${(error as Error).message}`)
-    } finally {
-      setLoading(false)
-    }
   }
 
   async function fetchActiveSessionId() {
@@ -140,8 +144,10 @@ function App() {
 
   async function invokeAgent(e: FormEvent) {
     e.preventDefault()
-    if (!query.trim()) return
+    const text = query.trim()
+    if (!text) return
 
+    setQuery('')
     setLoading(true)
     try {
       const data = await requestJson<AgentResponse>('/agent/invoke', {
@@ -149,8 +155,8 @@ function App() {
         body: JSON.stringify({
           user_id: userId,
           session_id: sessionId,
-          query,
-          system_message: systemMessage,
+          query: text,
+          system_message: defaultSystemMessage,
         }),
       })
       setCurrentResponse(data)
@@ -233,7 +239,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <h1>ReAct Agent Web UI</h1>
-        <p>浅色简约版会话控制台</p>
+        <p>会话控制台</p>
       </header>
 
       <main className="layout">
@@ -251,16 +257,10 @@ function App() {
             会话 ID
             <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} />
           </label>
-          <div className="row">
-            <button onClick={fetchSystemInfo} disabled={loading}>系统信息</button>
+          <div className="sidebar-actions">
             <button onClick={fetchActiveSessionId} disabled={loading}>恢复最近会话</button>
-          </div>
-          <div className="row">
             <button onClick={fetchUserSessions} disabled={loading}>历史会话</button>
             <button onClick={() => setSessionId(createSessionId())} disabled={loading}>新会话</button>
-          </div>
-          <div className="row">
-            <button onClick={fetchCurrentSessionStatus} disabled={loading}>查询状态</button>
             <button className="danger" onClick={deleteCurrentSession} disabled={loading}>删除会话</button>
           </div>
           <div className="history-list">
@@ -274,20 +274,23 @@ function App() {
 
         <section className="card content">
           <h2>提问与响应</h2>
+
+          <section className="panel answer-panel">
+            <h3>最终回答</h3>
+            <pre>{streamingAnswer || '暂无回答'}</pre>
+          </section>
+
           <form onSubmit={invokeAgent}>
             <label>
-              System Message
+              用户问题
               <textarea
                 rows={3}
-                value={systemMessage}
-                onChange={(e) => setSystemMessage(e.target.value)}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="请输入需求，例如：我想在北京海淀区预订如家酒店"
               />
             </label>
-            <label>
-              用户问题
-              <textarea rows={3} value={query} onChange={(e) => setQuery(e.target.value)} />
-            </label>
-            <div className="row">
+            <div className="row submit-row">
               <button type="submit" disabled={loading}>提交问题</button>
             </div>
           </form>
@@ -299,11 +302,6 @@ function App() {
               <p>更新时间：{new Date(currentStatus.last_updated * 1000).toLocaleString()}</p>
             ) : null}
             {currentStatus?.last_query ? <p>上次问题：{currentStatus.last_query}</p> : null}
-          </section>
-
-          <section className="panel">
-            <h3>最终回答</h3>
-            <pre>{finalAnswer || '暂无回答'}</pre>
           </section>
 
           {currentResponse?.status === 'interrupted' && (
@@ -358,12 +356,6 @@ function App() {
             />
           </label>
           <button onClick={writeLongTermMemory} disabled={loading}>写入长期记忆</button>
-
-          <section className="panel">
-            <h3>系统概览</h3>
-            <p>总会话：{systemInfo?.sessions_count ?? '-'}</p>
-            <pre>{JSON.stringify(systemInfo?.active_users ?? {}, null, 2)}</pre>
-          </section>
 
           <section className="panel">
             <h3>操作日志</h3>
