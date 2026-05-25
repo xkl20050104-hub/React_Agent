@@ -6,14 +6,16 @@
 
 ## 这个项目能做什么
 
-| 能力 | 说明 |
-|------|------|
-| **智能对话** | 用户提问后，Agent 自动推理，按需调用工具并返回结果 |
-| **工具调用** | 支持自定义工具（酒店预订、计算等）与 MCP 工具（高德地图） |
+
+| 能力            | 说明                                               |
+| ------------- | ------------------------------------------------ |
+| **智能对话**      | 用户提问后，Agent 自动推理，按需调用工具并返回结果                     |
+| **工具调用**      | 支持自定义工具（酒店预订、计算等）与 MCP 工具（高德地图）                  |
 | **HITL 人工审查** | 敏感工具调用前暂停，由用户 approve / reject / edit / response |
-| **短期记忆** | 同一会话内多轮对话上下文，持久化到 PostgreSQL |
-| **长期记忆** | 按用户保存偏好信息，跨会话注入系统提示词 |
-| **会话管理** | Redis 记录会话状态，支持恢复最近会话、切换历史会话 |
+| **短期记忆**      | 同一会话内多轮对话上下文，持久化到 PostgreSQL                     |
+| **长期记忆**      | 按用户保存偏好信息，跨会话注入系统提示词                             |
+| **会话管理**      | Redis 记录会话状态，支持恢复最近会话、切换历史会话                     |
+
 
 ---
 
@@ -29,6 +31,8 @@ flowchart LR
     C --> G[(PostgreSQL: 长期记忆 Store)]
 ```
 
+
+
 **数据如何关联：**
 
 - **用户 ID** → 长期记忆、Redis 会话索引
@@ -39,13 +43,15 @@ flowchart LR
 
 ## 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 后端 | Python 3.10+、FastAPI、Uvicorn |
-| Agent | LangGraph、LangChain、ReAct |
-| 存储 | PostgreSQL（记忆）、Redis（会话状态） |
-| 前端 | React 19、TypeScript、Vite |
-| 工具 | MCP（高德地图）、自定义 Function Calling |
+
+| 层级    | 技术                             |
+| ----- | ------------------------------ |
+| 后端    | Python 3.10+、FastAPI、Uvicorn   |
+| Agent | LangGraph、LangChain、ReAct      |
+| 存储    | PostgreSQL（记忆）、Redis（会话状态）     |
+| 前端    | React 19、TypeScript、Vite       |
+| 工具    | MCP（高德地图）、自定义 Function Calling |
+
 
 ---
 
@@ -118,8 +124,8 @@ python 01_backendServer.py
 
 启动成功后，控制台应出现 Agent、Checkpointer、Redis 初始化成功的日志。
 
-- 后端地址：**http://localhost:8002**
-- API 文档：**http://localhost:8002/docs**
+- 后端地址：**[http://localhost:8002](http://localhost:8002)**
+- API 文档：**[http://localhost:8002/docs](http://localhost:8002/docs)**
 
 ### 5. 启动前端
 
@@ -131,12 +137,12 @@ npm install
 npm run dev
 ```
 
-- 前端地址：**http://localhost:5173**
+- 前端地址：**[http://localhost:5173](http://localhost:5173)**
 - 默认后端地址已在 UI 中配置为 `http://localhost:8002`，可在左侧修改
 
 ### 6. 验证
 
-1. 打开 http://localhost:5173
+1. 打开 [http://localhost:5173](http://localhost:5173)
 2. 输入问题，例如：「你好」或「帮我查北京海淀区的酒店」
 3. 若触发工具调用，会出现 HITL 审批面板，选择允许或拒绝后继续
 
@@ -146,13 +152,15 @@ npm run dev
 
 主要配置位于 `utils/config.py`：
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `LLM_TYPE` | `qwen` | 模型类型：`qwen` / `openai` / `ollama` / `oneapi` |
-| `DB_URI` | 见 config | PostgreSQL 连接串，可用环境变量 `DB_URI` 覆盖 |
-| `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | Redis 地址 |
-| `PORT` | `8002` | 后端监听端口，可用环境变量 `PORT` 覆盖 |
-| `TTL` | `3600` | Redis 会话过期时间（秒） |
+
+| 配置项                         | 默认值                  | 说明                                           |
+| --------------------------- | -------------------- | -------------------------------------------- |
+| `LLM_TYPE`                  | `qwen`               | 模型类型：`qwen` / `openai` / `ollama` / `oneapi` |
+| `DB_URI`                    | 见 config             | PostgreSQL 连接串，可用环境变量 `DB_URI` 覆盖            |
+| `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | Redis 地址                                     |
+| `PORT`                      | `8002`               | 后端监听端口，可用环境变量 `PORT` 覆盖                      |
+| `TTL`                       | `3600`               | Redis 会话过期时间（秒）                              |
+
 
 模型详细配置见 `utils/llms.py` 中的 `MODEL_CONFIGS`。
 
@@ -160,12 +168,14 @@ npm run dev
 
 ## Web UI 使用说明
 
-| 区域 | 功能 |
-|------|------|
-| **左侧 · 连接与会话** | 配置后端地址、用户 ID、会话 ID；恢复/切换/新建/删除会话 |
-| **中间 · 提问与响应** | 最终回答（上）→ 用户提问（中）→ 状态（下）；支持流式展示效果 |
-| **右侧 · 长期记忆** | 写入用户偏好，下次提问时自动注入 Agent |
-| **HITL 面板** | 工具调用中断时出现，支持 yes / no / edit / response |
+
+| 区域             | 功能                                      |
+| -------------- | --------------------------------------- |
+| **左侧 · 连接与会话** | 配置后端地址、用户 ID、会话 ID；恢复/切换/新建/删除会话        |
+| **中间 · 提问与响应** | 最终回答（上）→ 用户提问（中）→ 状态（下）；支持流式展示效果        |
+| **右侧 · 长期记忆**  | 写入用户偏好，下次提问时自动注入 Agent                  |
+| **HITL 面板**    | 工具调用中断时出现，支持 yes / no / edit / response |
+
 
 **会话操作简要说明：**
 
@@ -202,6 +212,8 @@ sequenceDiagram
     API-->>UI: 返回最终回答
 ```
 
+
+
 ---
 
 ## API 参考
@@ -236,15 +248,17 @@ sequenceDiagram
 
 ### 其他常用接口
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/agent/status/{user_id}/{session_id}` | 查询会话状态 |
-| GET | `/agent/active/sessionid/{user_id}` | 获取最近活跃会话 ID |
-| GET | `/agent/sessionids/{user_id}` | 获取用户历史会话列表 |
-| DELETE | `/agent/session/{user_id}/{session_id}` | 删除会话（Redis） |
-| POST | `/agent/write/longterm` | 写入长期记忆 |
 
-完整接口说明：**http://localhost:8002/docs**
+| 方法     | 路径                                      | 说明          |
+| ------ | --------------------------------------- | ----------- |
+| GET    | `/agent/status/{user_id}/{session_id}`  | 查询会话状态      |
+| GET    | `/agent/active/sessionid/{user_id}`     | 获取最近活跃会话 ID |
+| GET    | `/agent/sessionids/{user_id}`           | 获取用户历史会话列表  |
+| DELETE | `/agent/session/{user_id}/{session_id}` | 删除会话（Redis） |
+| POST   | `/agent/write/longterm`                 | 写入长期记忆      |
+
+
+完整接口说明：**[http://localhost:8002/docs](http://localhost:8002/docs)**
 
 ---
 
@@ -296,8 +310,3 @@ A：在审批面板选择 yes / no / edit / response；底层由 LangGraph Check
 - Tracing、Metrics、Prompt 日志
 - 自动化测试与 CI/CD
 
----
-
-## License
-
-本项目仅供学习与工程实践参考。
